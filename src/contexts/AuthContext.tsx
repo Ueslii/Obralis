@@ -77,25 +77,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   // Efeito para gerenciar o estado de autenticação em toda a aplicação
   useEffect(() => {
-    // A melhor prática é usar apenas o onAuthStateChange.
-    // Ele dispara um evento 'INITIAL_SESSION' no carregamento da página.
-    // Isso evita a necessidade de chamar getSession() e o listener separadamente.
+    let isMounted = true;
+
+    const initializeSession = async () => {
+      try {
+        const {
+          data: { session: initialSession },
+        } = await supabase.auth.getSession();
+
+        if (!isMounted) return;
+
+        setSession(initialSession);
+
+        if (initialSession?.user) {
+          await loadUserProfile(initialSession.user);
+        } else {
+          setUser(null);
+        }
+      } catch (error) {
+        console.error("Erro ao recuperar sessão inicial:", error);
+        if (!isMounted) return;
+        setSession(null);
+        setUser(null);
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void initializeSession();
+
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!isMounted) return;
+
       setSession(session);
       if (session?.user) {
         await loadUserProfile(session.user);
       } else {
-        // Se não há sessão, o usuário é nulo.
         setUser(null);
       }
-      // O loading é finalizado após a primeira verificação (seja ela com ou sem sessão)
-      setLoading(false);
     });
 
     // Limpa a inscrição ao desmontar o componente
-    return () => subscription.unsubscribe();
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, [loadUserProfile]); // A dependência garante que a função mais recente seja usada
 
   // Função de cadastro
