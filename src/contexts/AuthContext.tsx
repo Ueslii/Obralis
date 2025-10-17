@@ -45,57 +45,101 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   // Função para carregar o perfil e as roles do usuário do banco de dados
   const loadUserProfile = useCallback(async (supabaseUser: SupabaseUser) => {
-    try {
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", supabaseUser.id)
-        .single();
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", supabaseUser.id)
+      .maybeSingle();
 
-      if (profileError) throw profileError;
+    if (profileError) throw profileError;
 
-      const { data: userRoles, error: rolesError } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", supabaseUser.id);
+    const { data: userRoles, error: rolesError } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", supabaseUser.id);
 
-      if (rolesError) throw rolesError;
+    if (rolesError) throw rolesError;
 
-      setUser({
-        id: supabaseUser.id,
-        nome: profile?.nome || supabaseUser.email?.split("@")[0] || "Usuário",
-        email: supabaseUser.email || "",
-        roles: userRoles?.map((r) => r.role) || ["usuario"],
-      });
-    } catch (error) {
-      console.error("Erro ao carregar perfil do usuário:", error);
-      setUser(null);
-      // Opcional: Deslogar o usuário se o perfil não puder ser carregado para evitar estado inconsistente
-      await supabase.auth.signOut();
-    }
+    return {
+      id: supabaseUser.id,
+      nome: profile?.nome || supabaseUser.email?.split("@")[0] || "Usuário",
+      email: supabaseUser.email || "",
+      roles: userRoles?.map((r) => r.role) || ["usuario"],
+    } satisfies User;
   }, []);
 
   // Efeito para gerenciar o estado de autenticação em toda a aplicação
   useEffect(() => {
-    // A melhor prática é usar apenas o onAuthStateChange.
-    // Ele dispara um evento 'INITIAL_SESSION' no carregamento da página.
-    // Isso evita a necessidade de chamar getSession() e o listener separadamente.
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
+    let isMounted = true;
+
+    const handleSessionChange = async (session: Session | null) => {
+      if (!isMounted) return;
+
       setSession(session);
+
       if (session?.user) {
-        await loadUserProfile(session.user);
+        try {
+          const profile = await loadUserProfile(session.user);
+
+          if (!isMounted) return;
+
+          setUser(profile);
+        } catch (error) {
+          console.error("Erro ao carregar perfil do usuário:", error);
+
+          if (!isMounted) return;
+
+          setUser({
+            id: session.user.id,
+            nome:
+              session.user.email?.split("@")[0] ||
+              session.user.user_metadata?.nome ||
+              "Usuário",
+            email: session.user.email || "",
+            roles: ["usuario"],
+          });
+        }
       } else {
-        // Se não há sessão, o usuário é nulo.
         setUser(null);
       }
-      // O loading é finalizado após a primeira verificação (seja ela com ou sem sessão)
-      setLoading(false);
+
+      if (isMounted) {
+        setLoading(false);
+      }
+    };
+
+    const initializeSession = async () => {
+      try {
+        const {
+          data: { session: initialSession },
+          error,
+        } = await supabase.auth.getSession();
+
+        if (error) throw error;
+
+        await handleSessionChange(initialSession);
+      } catch (error) {
+        console.error("Erro ao recuperar sessão inicial:", error);
+        if (!isMounted) return;
+        setSession(null);
+        setUser(null);
+        setLoading(false);
+      }
+    };
+
+    void initializeSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      await handleSessionChange(session);
     });
 
     // Limpa a inscrição ao desmontar o componente
-    return () => subscription.unsubscribe();
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, [loadUserProfile]); // A dependência garante que a função mais recente seja usada
 
   // Função de cadastro
