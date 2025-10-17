@@ -45,64 +45,85 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   // Função para carregar o perfil e as roles do usuário do banco de dados
   const loadUserProfile = useCallback(async (supabaseUser: SupabaseUser) => {
-    try {
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", supabaseUser.id)
-        .single();
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", supabaseUser.id)
+      .maybeSingle();
 
-      if (profileError) throw profileError;
+    if (profileError) throw profileError;
 
-      const { data: userRoles, error: rolesError } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", supabaseUser.id);
+    const { data: userRoles, error: rolesError } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", supabaseUser.id);
 
-      if (rolesError) throw rolesError;
+    if (rolesError) throw rolesError;
 
-      setUser({
-        id: supabaseUser.id,
-        nome: profile?.nome || supabaseUser.email?.split("@")[0] || "Usuário",
-        email: supabaseUser.email || "",
-        roles: userRoles?.map((r) => r.role) || ["usuario"],
-      });
-    } catch (error) {
-      console.error("Erro ao carregar perfil do usuário:", error);
-      setUser(null);
-      // Opcional: Deslogar o usuário se o perfil não puder ser carregado para evitar estado inconsistente
-      await supabase.auth.signOut();
-    }
+    return {
+      id: supabaseUser.id,
+      nome: profile?.nome || supabaseUser.email?.split("@")[0] || "Usuário",
+      email: supabaseUser.email || "",
+      roles: userRoles?.map((r) => r.role) || ["usuario"],
+    } satisfies User;
   }, []);
 
   // Efeito para gerenciar o estado de autenticação em toda a aplicação
   useEffect(() => {
     let isMounted = true;
 
+    const handleSessionChange = async (session: Session | null) => {
+      if (!isMounted) return;
+
+      setSession(session);
+
+      if (session?.user) {
+        try {
+          const profile = await loadUserProfile(session.user);
+
+          if (!isMounted) return;
+
+          setUser(profile);
+        } catch (error) {
+          console.error("Erro ao carregar perfil do usuário:", error);
+
+          if (!isMounted) return;
+
+          setUser({
+            id: session.user.id,
+            nome:
+              session.user.email?.split("@")[0] ||
+              session.user.user_metadata?.nome ||
+              "Usuário",
+            email: session.user.email || "",
+            roles: ["usuario"],
+          });
+        }
+      } else {
+        setUser(null);
+      }
+
+      if (isMounted) {
+        setLoading(false);
+      }
+    };
+
     const initializeSession = async () => {
       try {
         const {
           data: { session: initialSession },
+          error,
         } = await supabase.auth.getSession();
 
-        if (!isMounted) return;
+        if (error) throw error;
 
-        setSession(initialSession);
-
-        if (initialSession?.user) {
-          await loadUserProfile(initialSession.user);
-        } else {
-          setUser(null);
-        }
+        await handleSessionChange(initialSession);
       } catch (error) {
         console.error("Erro ao recuperar sessão inicial:", error);
         if (!isMounted) return;
         setSession(null);
         setUser(null);
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+        setLoading(false);
       }
     };
 
@@ -111,14 +132,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (!isMounted) return;
-
-      setSession(session);
-      if (session?.user) {
-        await loadUserProfile(session.user);
-      } else {
-        setUser(null);
-      }
+      await handleSessionChange(session);
     });
 
     // Limpa a inscrição ao desmontar o componente
